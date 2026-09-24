@@ -154,3 +154,38 @@ describe("SessionModelRequest HTTP hooks", () => {
     }),
   )
 })
+
+describe("SessionModelRequest output limit", () => {
+  const input = { session, agent: Agent.ID.make("build"), model, system: [], messages: [] }
+
+  it.effect("sends the default output limit for every Session request kind", () =>
+    Effect.gen(function* () {
+      const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+      for (const kind of KINDS) expect((yield* requests[kind](input)).request.generation?.maxTokens).toBe(32_000)
+      expect((yield* requests.primary({ ...input, inputTokens: 180_000 })).request.generation?.maxTokens).toBe(15_904)
+    }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
+  )
+
+  it.effect("lets hooks change or remove the default output limit", () =>
+    Effect.gen(function* () {
+      const hooks = yield* PluginHooks.Service
+      const seen: Array<number | undefined> = []
+      yield* hooks.register("session", "context", (event) =>
+        Effect.sync(() => {
+          seen.push(event.options.maxTokens)
+          delete event.options.maxTokens
+        }),
+      )
+      yield* hooks.register("session", "title", (event) =>
+        Effect.sync(() => {
+          event.options.maxTokens = 100
+        }),
+      )
+      const requests = yield* SessionModelRequest.Service.pipe(Effect.provide(SessionModelRequest.layer))
+
+      expect((yield* requests.primary(input)).request.generation).toBeUndefined()
+      expect((yield* requests.title(input)).request.generation?.maxTokens).toBe(100)
+      expect(seen).toEqual([32_000])
+    }).pipe(Effect.provideService(SessionModelTransport.Service, transport)),
+  )
+})

@@ -313,6 +313,62 @@ describe("provider error classification", () => {
     ).toEqual(["QuotaExceeded", "ProviderInternal", "InvalidRequest"])
   })
 
+  test("reads the accepted output limit from rejections that state the model maximum", () => {
+    const rejection = (message: string) => classifyProviderFailure({ message, status: 400 })
+    expect(
+      rejection(
+        "max_tokens is too large: 100000. This model supports at most 16384 completion tokens, whereas you provided 100000.",
+      ),
+    ).toMatchObject({ _tag: "InvalidRequest", classification: "output-limit", acceptedMaxTokens: 16384 })
+  })
+
+  test("derives the accepted output limit from rejections that report the context window and input", () => {
+    const cases: Array<[string, number]> = [
+      [
+        "This model's maximum context length is 128000 tokens. However, you requested 140000 tokens (100000 in the messages, 40000 in the completion). Please reduce the length of the messages or completion.",
+        28_000,
+      ],
+      [
+        "This model's maximum context length is 128000 tokens. However, you requested 140,000 tokens (95,000 in the messages, 5,000 in the functions, 40,000 in the completion).",
+        28_000,
+      ],
+      [
+        "'max_tokens' or 'max_completion_tokens' is too large: 32000. This model's maximum context length is 32768 tokens and your request has 8000 input tokens (32000 > 32768 - 8000).",
+        24_768,
+      ],
+      [
+        "input length and `max_tokens` exceed context limit: 188240 + 21333 > 200000, decrease input length or `max_tokens` and try again",
+        11_760,
+      ],
+    ]
+    for (const [message, accepted] of cases)
+      expect(classifyProviderFailure({ message, status: 400 })).toMatchObject({
+        _tag: "InvalidRequest",
+        classification: "output-limit",
+        acceptedMaxTokens: accepted,
+      })
+  })
+
+  test("classifies context-sum rejections as overflow when the input alone fills the window", () => {
+    const messages = [
+      "This model's maximum context length is 128000 tokens. However, you requested 140000 tokens (130000 in the messages, 10000 in the completion). Please reduce the length of the messages or completion.",
+      "Input validation error: `inputs` tokens + `max_new_tokens` must be <= 131073. Given: 140000 `inputs` tokens and 1000 `max_new_tokens`",
+      "input length and `max_tokens` exceed context limit: 210000 + 21333 > 200000, decrease input length or `max_tokens` and try again",
+    ]
+    for (const message of messages) {
+      expect(classifyProviderFailure({ message, status: 400 })).toMatchObject({
+        _tag: "InvalidRequest",
+        classification: "context-overflow",
+      })
+      expect(isContextOverflow(message)).toBe(true)
+    }
+    expect(
+      isContextOverflow(
+        "This model's maximum context length is 128000 tokens. However, you requested 140000 tokens (100000 in the messages, 40000 in the completion).",
+      ),
+    ).toBe(false)
+  })
+
   test("leaves unrecognized failures unclassified for the retry default", () => {
     expect(classifyProviderFailure({ message: '{"error":{"message":"no_kv_space"}}' })._tag).toBe("UnknownProvider")
     expect(classifyProviderFailure({ message: '{"type":"error","error":{"code":123}}' })._tag).toBe("UnknownProvider")

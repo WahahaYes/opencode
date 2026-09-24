@@ -1,6 +1,6 @@
 export * as SessionGenerate from "./generate.js"
 
-import { LLMClient, Message, type AIError } from "@opencode/ai"
+import { acceptedMaxTokens, LLMClient, Message, type AIError } from "@opencode/ai"
 import { Effect } from "effect"
 import { Database } from "../database/database.js"
 import { Instance } from "../instance/service.js"
@@ -60,7 +60,14 @@ export const generate = Effect.fn("SessionGenerate.generate")(function* (input: 
       providerID: model.ref.providerID,
       modelID: model.ref.id,
     })
-    const response = yield* llm.generate(prepared.request, prepared.options)
+    const response = yield* llm.generate(prepared.request, prepared.options).pipe(
+      Effect.catchTag("AI.Error", (error) => {
+        const accepted = acceptedMaxTokens(error)
+        return accepted === undefined
+          ? Effect.fail(error)
+          : llm.generate(SessionModelRequest.lowerMaxTokens(prepared.request, accepted), prepared.options)
+      }),
+    )
     yield* Effect.logInfo("session generation usage diagnostic", { usage: response.usage })
     return response.text
   }).pipe(instances.provide(input.session))

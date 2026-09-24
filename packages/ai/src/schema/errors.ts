@@ -2,7 +2,7 @@ import { Schema } from "effect"
 import { Tool } from "@opencode/schema/tool"
 import { ModelID, ProviderID, RouteID } from "./ids.js"
 
-export const ProviderFailureClassification = Schema.Literals(["context-overflow", "payload-too-large"])
+export const ProviderFailureClassification = Schema.Literals(["context-overflow", "output-limit", "payload-too-large"])
 export type ProviderFailureClassification = typeof ProviderFailureClassification.Type
 
 export class HttpContext extends Schema.Class<HttpContext>("AI.HttpContext")({
@@ -32,6 +32,8 @@ export class InvalidRequestError extends Schema.TaggedError<InvalidRequestError>
     ...ReasonFields,
     parameter: Schema.optional(Schema.String),
     classification: Schema.optional(ProviderFailureClassification),
+    /** With `output-limit`: the largest `maxTokens` the provider accepts for this request. */
+    acceptedMaxTokens: Schema.optional(Schema.Int),
   },
 ) {}
 

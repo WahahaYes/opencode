@@ -259,6 +259,40 @@ describe("GithubCopilotPlugin", () => {
     }),
   )
 
+  it.effect("omits the output limit for GPT models only", () =>
+    Effect.gen(function* () {
+      yield* addPlugin()
+      const hooks = yield* PluginHooks.Service
+      const sessionID = (yield* sessions()).parent
+      const maxTokens = (providerID: Provider.ID, id: string) =>
+        Effect.gen(function* () {
+          const draft = {
+            sessionID,
+            model: Model.Ref.make({ providerID, id: Model.ID.make(id) }),
+            system: [],
+            messages: [],
+            options: { maxTokens: 32_000 },
+          }
+          const events = [
+            yield* hooks.trigger("session", "context", { ...draft, agent: Agent.ID.make("build"), tools: {} }),
+            yield* hooks.trigger("session", "compaction", { ...draft, agent: Agent.ID.make("build"), tools: {} }),
+            yield* hooks.trigger("session", "generate", { ...draft, agent: Agent.ID.make("build"), tools: {} }),
+            yield* hooks.trigger("session", "title", draft),
+          ]
+          return events.map((event) => event.options.maxTokens)
+        })
+
+      expect(yield* maxTokens(Provider.ID.githubCopilot, "gpt-5.4")).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      ])
+      expect(yield* maxTokens(Provider.ID.githubCopilot, "claude-sonnet-4.5")).toEqual([32_000, 32_000, 32_000, 32_000])
+      expect(yield* maxTokens(Provider.ID.make("openai"), "gpt-5.4")).toEqual([32_000, 32_000, 32_000, 32_000])
+    }),
+  )
+
   it.effect("classifies session generation requests as agent interactions", () =>
     Effect.gen(function* () {
       yield* addPlugin()
@@ -492,10 +526,9 @@ describe("GithubCopilotPlugin", () => {
         editor.models.update(Provider.ID.githubCopilot, Model.ID.make("gpt-5-chat-latest"), () => {})
       })
       yield* addPlugin()
-      expect(
-        required(yield* models.get(Provider.ID.githubCopilot, Model.ID.make("gpt-5-chat-latest")))
-          .enabled,
-      ).toBe(false)
+      expect(required(yield* models.get(Provider.ID.githubCopilot, Model.ID.make("gpt-5-chat-latest"))).enabled).toBe(
+        false,
+      )
     }),
   )
 
@@ -509,8 +542,7 @@ describe("GithubCopilotPlugin", () => {
       })
       yield* addPlugin()
       expect(
-        required(yield* models.get(Provider.ID.make("custom-copilot"), Model.ID.make("gpt-5-chat-latest")))
-          .enabled,
+        required(yield* models.get(Provider.ID.make("custom-copilot"), Model.ID.make("gpt-5-chat-latest"))).enabled,
       ).toBe(true)
     }),
   )

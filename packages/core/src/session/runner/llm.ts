@@ -209,6 +209,8 @@ const layer = Layer.effect(
       let initial: SessionContext.Loaded | undefined = first
       let recoverOverflow = true
       let recoverContinuation = true
+      // A provider-stated output limit applies to the rest of this logical step.
+      let maxTokens: number | undefined
       while (true) {
         // Reuse boundary preparation once; retries refresh context without delivering more input.
         const loaded = initial ?? (yield* prepareContext(sessionID).pipe(Effect.flatMap(context.load)))
@@ -244,6 +246,11 @@ const layer = Layer.effect(
           // Keep tool definitions on the final Step to preserve the provider's cached prefix.
           toolChoice: stepLimitReached ? "none" : undefined,
           webSocket: "session",
+          inputTokens: SessionCompaction.estimateTokens({
+            messages: loaded.messages,
+            resolved: loaded.model,
+            context: loaded,
+          }),
         })
         const outcome = yield* steps.attempt({
           isLocationClosed: lifecycle.isClosed,
@@ -251,7 +258,10 @@ const layer = Layer.effect(
           assistantMessageID,
           agent: loaded.agent.id,
           model: loaded.model,
-          prepared,
+          prepared:
+            maxTokens === undefined
+              ? prepared
+              : { ...prepared, request: SessionModelRequest.lowerMaxTokens(prepared.request, maxTokens) },
           retry: (cause, error, proposed) =>
             retry.decide({
               cause,
@@ -262,6 +272,7 @@ const layer = Layer.effect(
               retry: proposed,
             }),
           recoverContinuation,
+          recoverOutputLimit: maxTokens === undefined,
           recoverOverflow: Effect.suspend(() =>
             recoverOverflow && compaction.enabled()
               ? compaction
@@ -293,6 +304,16 @@ const layer = Layer.effect(
           }),
           RecoverFull: Effect.fnUntraced(function* () {
             recoverContinuation = false
+          }),
+          LowerOutputLimit: Effect.fnUntraced(function* (outcome) {
+            yield* Effect.logWarning("provider rejected the requested output limit", {
+              sessionID,
+              providerID: loaded.model.ref.providerID,
+              modelID: loaded.model.ref.id,
+              requested: prepared.request.generation?.maxTokens,
+              accepted: outcome.maxTokens,
+            })
+            maxTokens = outcome.maxTokens
           }),
         })
         if (completed !== undefined) return completed

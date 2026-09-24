@@ -1,11 +1,13 @@
 export * as SessionModelRequest from "./model-request.js"
 
 import {
+  acceptedMaxTokens,
   GenerationOptions,
   type GenerationOptionsFields,
   HttpOptions,
   LanguageModel,
   LLM,
+  type LLMClientShape,
   LLMRequest,
   type Media,
   Message,
@@ -44,6 +46,12 @@ const IMAGE_BYTES_TARGET = 15 * 1024 * 1024 // 15 MiB
 const IMAGE_REMOVED =
   "[This image was removed to reduce the request size and is no longer visible. Do not make claims about its contents from memory. If needed, retrieve it again with an available tool or ask the user to attach it again.]"
 const GENERATION_KEYS = new Set(Object.keys(GenerationOptions.fields))
+const OUTPUT_TOKEN_CAP = 128_000
+// Used when the catalog has no output limit for the model.
+const OUTPUT_TOKEN_FALLBACK = 32_000
+// Input sizes are estimates, so leave part of the context window unclaimed.
+const CONTEXT_MARGIN = 4_096
+const OUTPUT_TOKEN_MIN = 1_024
 
 /** Tool errors, plus the user declining a permission or dismissing a question. */
 export type ExecuteError = Tool.Error | Permission.DeclinedError | QuestionTool.CancelledError
@@ -69,7 +77,33 @@ export interface Input {
   readonly toolChoice?: LLM.RequestInput["toolChoice"]
   /** Only the durable runner may use a stateful WebSocket. */
   readonly webSocket?: "session"
+  /** Estimated prompt size. The default output limit leaves this much of the context window for the prompt. */
+  readonly inputTokens?: number
 }
+
+/** The default output limit: the catalog limit, capped, and fitted to the room the prompt leaves in the context window. */
+export const outputLimit = (limit: Model.Info["limit"], inputTokens?: number) => {
+  const requested = Math.min(limit.output > 0 ? limit.output : OUTPUT_TOKEN_FALLBACK, OUTPUT_TOKEN_CAP)
+  if (inputTokens === undefined || limit.context <= 0) return requested
+  return Math.min(requested, Math.max(OUTPUT_TOKEN_MIN, limit.context - inputTokens - CONTEXT_MARGIN))
+}
+
+export const lowerMaxTokens = (request: LLMRequest, maxTokens: number) =>
+  LLMRequest.update(request, {
+    generation: GenerationOptions.make({
+      ...request.generation,
+      maxTokens: Math.min(maxTokens, request.generation?.maxTokens ?? maxTokens),
+    }),
+  })
+
+/** Streams an auxiliary request, retrying once at the output limit a provider accepts after rejecting the requested one. */
+export const streamAuxiliary = (llm: Pick<LLMClientShape, "stream">, request: LLMRequest, options: StreamOptions) =>
+  llm.stream(request, options).pipe(
+    Stream.catchTag("AI.Error", (error) => {
+      const accepted = acceptedMaxTokens(error)
+      return accepted === undefined ? Stream.fail(error) : llm.stream(lowerMaxTokens(request, accepted), options)
+    }),
+  )
 
 export const baseTranscript = (input: {
   readonly agent: Agent.Info
@@ -218,8 +252,15 @@ export const layer = Layer.effect(
       const given = new Map(
         tools.definitions.map((t) => [{ description: t.description, input: { ...t.inputSchema } }, t] as const),
       )
+      // Hooks see the default output limit and may change or remove it.
       const shaped = yield* shape(
-        { sessionID: session.id, model: model.ref, system: input.system, messages: input.messages, options: {} },
+        {
+          sessionID: session.id,
+          model: model.ref,
+          system: input.system,
+          messages: input.messages,
+          options: { maxTokens: outputLimit(model.limit, input.inputTokens) },
+        },
         Object.fromEntries(Array.from(given, ([d, t]) => [t.name, d])),
       )
       // Match by identity first, then by key. Entries matching neither were invented by a
@@ -232,7 +273,9 @@ export const layer = Layer.effect(
         }),
       )
       const entries = Object.entries(shaped.options)
-      const generation = Object.fromEntries(entries.filter(([k]) => GENERATION_KEYS.has(k))) as GenerationOptionsFields
+      const generation = Object.fromEntries(
+        entries.filter(([k, v]) => GENERATION_KEYS.has(k) && v !== undefined),
+      ) as GenerationOptionsFields
       const providerOptions = Object.fromEntries(entries.filter(([k]) => !GENERATION_KEYS.has(k)))
       const affinity = session.parentID ?? session.fork?.sessionID ?? session.id
       const base = LLM.request({

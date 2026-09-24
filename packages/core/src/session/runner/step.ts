@@ -1,6 +1,7 @@
 export * as SessionStep from "./step.js"
 
 import {
+  acceptedMaxTokens,
   AIError,
   InvalidProviderOutputError,
   LLMClient,
@@ -38,6 +39,8 @@ export type Outcome = Data.TaggedEnum<{
   }
   RecoverFull: {}
   Compacted: {}
+  /** The provider rejected the requested output limit before any output and accepts `maxTokens`. */
+  LowerOutputLimit: { readonly maxTokens: number }
 }>
 export const Outcome = Data.taggedEnum<Outcome>()
 
@@ -54,6 +57,7 @@ interface Input {
     retry: boolean,
   ) => Effect.Effect<{ readonly retry: false } | SessionRunnerRetry.Decision>
   readonly recoverContinuation: boolean
+  readonly recoverOutputLimit: boolean
   /** The runner owns compaction policy; the attempt invokes it only before durable output. */
   readonly recoverOverflow: Effect.Effect<boolean>
 }
@@ -143,6 +147,10 @@ export const make = Effect.gen(function* () {
         const joined = yield* restore(Fiber.awaitAll(toolRuns.map((run) => run.fiber))).pipe(Effect.exit)
         if (Exit.isFailure(joined)) yield* interruptTools
         const tools = classifyToolExits(joined, toolRuns)
+
+        const accepted = acceptedMaxTokens(streamFailure)
+        if (input.recoverOutputLimit && accepted !== undefined && !publisher.record().outputStarted)
+          return Outcome.LowerOutputLimit({ maxTokens: accepted })
 
         if (
           !publisher.record().outputStarted &&

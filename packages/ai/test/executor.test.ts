@@ -9,6 +9,7 @@ import { dynamicResponse, fixedResponse, systemError } from "./lib/http.js"
 import { deltaChunk } from "./lib/openai-chunks.js"
 import { sseEvents, sseRaw } from "./lib/sse.js"
 import { it } from "./lib/effect.js"
+import providerErrors from "./fixtures/provider-errors.json"
 
 const request = HttpClientRequest.post("https://provider.test/v1/chat?api_key=secret&key=secret&debug=1").pipe(
   HttpClientRequest.setHeaders(Headers.fromInput({ authorization: "Bearer secret", "x-safe": "visible" })),
@@ -244,6 +245,23 @@ describe("RequestExecutor", () => {
       ),
     ),
   )
+
+  // Recorded rejections of oversized output limits, oversized prompts, and token throttles from real providers.
+  for (const fixture of providerErrors)
+    it.effect(
+      `classifies ${fixture.provider} ${fixture.model} HTTP ${fixture.status} for maxTokens ${fixture.maxTokens}`,
+      () =>
+        Effect.gen(function* () {
+          const executor = yield* RequestExecutor.Service
+          const error = expectAIError(yield* executor.execute(request).pipe(Effect.flip))
+
+          expect({
+            tag: error.reason._tag,
+            classification: "classification" in error.reason ? error.reason.classification : undefined,
+            acceptedMaxTokens: "acceptedMaxTokens" in error.reason ? error.reason.acceptedMaxTokens : undefined,
+          }).toEqual(fixture.expected)
+        }).pipe(Effect.provide(fixedResponse(fixture.body, { status: fixture.status }))),
+    )
 
   it.effect("does not classify ordinary invalid requests as context overflow", () =>
     Effect.gen(function* () {

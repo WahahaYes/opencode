@@ -12,6 +12,7 @@ import { llmClient } from "../effect/app-node-platform.js"
 import { SessionContext } from "./context.js"
 import { SessionEvent } from "./event.js"
 import { SessionHistory } from "./history.js"
+import { SessionModelRequest } from "./model-request.js"
 import type { SessionRunnerModel } from "./runner/model.js"
 import { SessionSchema } from "./schema.js"
 import { SessionUsage } from "./usage.js"
@@ -71,7 +72,7 @@ export const layer = Layer.effect(
         messages: [Message.user(input.text)],
       })
       if (prepared.event.result !== undefined) return prepared.event.result
-      yield* llm.stream(prepared.request, prepared.options).pipe(
+      yield* SessionModelRequest.streamAuxiliary(llm, prepared.request, prepared.options).pipe(
         Stream.runForEach((event) => {
           if (LLMEvent.is.providerError(event)) failed = true
           if (LLMEvent.is.textDelta(event)) chunks.push(event.text)

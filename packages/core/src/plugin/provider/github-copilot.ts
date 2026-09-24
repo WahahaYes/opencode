@@ -1,5 +1,5 @@
 import type { IntegrationOAuthMethodRegistration } from "@opencode/plugin/effect/integration"
-import type { SessionRequestKind } from "@opencode/plugin/effect/session"
+import type { SessionRequest, SessionRequestKind } from "@opencode/plugin/effect/session"
 import { Effect, Option, Schema, Semaphore, Stream } from "effect"
 import { IntegrationConnection } from "../../integration/connection.js"
 import { Credential } from "../../credential.js"
@@ -273,6 +273,13 @@ export const GithubCopilotPlugin = define({
         }),
       { providerID: Provider.ID.githubCopilot },
     )
+    // Leave the output limit to Copilot for GPT models.
+    const omitOutputLimit = (evt: SessionRequest) =>
+      Effect.sync(() => {
+        if (evt.model.id.includes("gpt")) delete evt.options.maxTokens
+      })
+    for (const name of ["context", "compaction", "generate", "title"] as const)
+      yield* ctx.session.hook(name, omitOutputLimit, { providerID: Provider.ID.githubCopilot })
     yield* ctx.session.hook(
       "http.request",
       (evt) =>

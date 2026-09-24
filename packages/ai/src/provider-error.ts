@@ -38,6 +38,8 @@ const patterns = [
   /prompt has [\d,]+ tokens?, but the configured context size is [\d,]+ tokens?/i,
   /model_context_window_exceeded/i,
   /range of input length should be/i,
+  /inputs`? tokens \+ `?max_new_tokens`? must be <=/i,
+  /input length and `?max_tokens`? exceed context limit/i,
   /too many tokens/i,
   /token limit exceeded/i,
   /request_too_large/i,
@@ -45,10 +47,99 @@ const patterns = [
 
 const payloadPatterns = [/request entity too large/i, /payload too large/i, /request too large/i]
 
-const exclusions = [/^(throttling error|service unavailable):/i, /rate limit/i, /too many requests/i]
+// Cerebras reports its per-minute token throttle as "too many tokens" with a quota code.
+const TOKEN_THROTTLE_TEXT = /tokens per minute/i
+
+const exclusions = [
+  /^(throttling error|service unavailable):/i,
+  /rate limit/i,
+  /too many requests/i,
+  TOKEN_THROTTLE_TEXT,
+]
+
+const NUMBER = String.raw`(\d[\d,]*)`
+
+// Rejections of the requested output limit that state the largest value the provider accepts.
+const outputMaximumPatterns = [
+  // Anthropic
+  new RegExp(String.raw`max_tokens: \d+ > ${NUMBER}, which is the maximum allowed number of output tokens`, "i"),
+  // Amazon Bedrock
+  new RegExp(String.raw`maximum tokens you requested exceeds the model limit of ${NUMBER}`, "i"),
+  // OpenAI Chat Completions and compatible servers
+  new RegExp(String.raw`supports at most ${NUMBER} completion tokens`, "i"),
+  // Groq, Perplexity
+  new RegExp(String.raw`max_(?:completion_)?tokens\`? must be (?:less than or equal to|at most) \`?${NUMBER}`, "i"),
+  // Baseten
+  new RegExp(String.raw`max_tokens \(\d+\): input should be less than or equal to ${NUMBER}`, "i"),
+  // DeepSeek, Alibaba
+  new RegExp(String.raw`range of max_tokens (?:is|should be) \[\s*\d+\s*,\s*${NUMBER}\s*\]`, "i"),
+  // Z.AI
+  new RegExp(String.raw`max_tokens parameter is illegal[^\[]*\[\s*\d+\s*,\s*${NUMBER}\s*\]`, "i"),
+  // MiniMax
+  new RegExp(String.raw`does not support max tokens (?:>|\\u003e) ${NUMBER}`, "i"),
+]
+
+// Rejections of input plus requested output above the context window. Each reads the window and the input size.
+const contextSumPatterns: ReadonlyArray<{ pattern: RegExp; read: (match: RegExpExecArray) => [number, number] }> = [
+  // OpenAI-compatible servers and OpenRouter list the requested output last, after every input category.
+  {
+    pattern: new RegExp(
+      String.raw`maximum context length is ${NUMBER} tokens\. However, you requested (?:about )?${NUMBER} tokens \(.*?${NUMBER} in the (?:completion|output)\)`,
+      "i",
+    ),
+    read: (match) => [count(match[1]), count(match[2]) - count(match[3])],
+  },
+  // vLLM
+  {
+    pattern: new RegExp(
+      String.raw`maximum context length is ${NUMBER} tokens and your request has ${NUMBER} input tokens`,
+      "i",
+    ),
+    read: (match) => [count(match[1]), count(match[2])],
+  },
+  // Together AI
+  {
+    pattern: new RegExp(
+      String.raw`inputs\`? tokens \+ \`?max_new_tokens\`? must be <= ${NUMBER}\. Given: ${NUMBER} \`?inputs`,
+      "i",
+    ),
+    read: (match) => [count(match[1]), count(match[2])],
+  },
+  // Anthropic
+  {
+    pattern: new RegExp(
+      String.raw`input length and \`?max_tokens\`? exceed context limit: ${NUMBER} \+ \d[\d,]* > ${NUMBER}`,
+      "i",
+    ),
+    read: (match) => [count(match[2]), count(match[1])],
+  },
+]
+
+function count(value: string) {
+  return Number(value.replaceAll(",", ""))
+}
+
+/**
+ * The largest output limit a provider accepts after rejecting the requested one, stated directly or derived from the
+ * context window and input size it reports. `undefined` when the input alone fills the window, which is an overflow.
+ */
+const acceptedOutputLimit = (message: string) => {
+  const stated = outputMaximumPatterns.map((pattern) => pattern.exec(message)?.[1]).find((value) => value !== undefined)
+  if (stated !== undefined) return count(stated)
+  const sum = contextSumPatterns
+    .map((item) => {
+      const match = item.pattern.exec(message)
+      return match ? item.read(match) : undefined
+    })
+    .find((value) => value !== undefined)
+  if (!sum) return undefined
+  const accepted = sum[0] - sum[1]
+  return accepted > 0 ? accepted : undefined
+}
 
 export const isContextOverflow = (message: string) =>
   !exclusions.some((pattern) => pattern.test(message)) &&
+  acceptedOutputLimit(message) === undefined &&
   (patterns.some((pattern) => pattern.test(message)) || /^4(?:00|13)\s*(status code)?\s*\(no body\)/i.test(message))
 
 export const isPayloadTooLarge = (message: string) => payloadPatterns.some((pattern) => pattern.test(message))
@@ -57,6 +148,14 @@ export const isContextOverflowFailure = (failure: unknown) =>
   failure instanceof AIError
     ? failure.reason._tag === "InvalidRequest" && failure.reason.classification === "context-overflow"
     : Schema.is(ProviderErrorEvent)(failure) && failure.classification === "context-overflow"
+
+/** The `maxTokens` a provider accepts after rejecting the requested output limit; `undefined` for any other failure. */
+export const acceptedMaxTokens = (failure: unknown) =>
+  failure instanceof AIError &&
+  failure.reason._tag === "InvalidRequest" &&
+  failure.reason.classification === "output-limit"
+    ? failure.reason.acceptedMaxTokens
+    : undefined
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
 // OpenCode Zen reports account caps as typed 429/402 errors that are not throttles.
@@ -141,6 +240,9 @@ export function classifyProviderFailure(input: ProviderFailure): AIError["reason
   const text = [input.message, body].filter((value) => value.length > 0).join("\n")
   const clientScoped = input.status === undefined || (input.status >= 400 && input.status < 500)
 
+  const acceptedMaxTokens = clientScoped ? acceptedOutputLimit(text) : undefined
+  if (acceptedMaxTokens !== undefined)
+    return new InvalidRequestError({ ...details, classification: "output-limit", acceptedMaxTokens })
   if (
     clientScoped &&
     (codes.includes("context_length_exceeded") ||
@@ -156,7 +258,7 @@ export function classifyProviderFailure(input: ProviderFailure): AIError["reason
   if (
     input.status === 402 ||
     codes.some((code) => QUOTA_CODES.has(code)) ||
-    (input.status === 429 && QUOTA_TEXT.test(text))
+    (input.status === 429 && QUOTA_TEXT.test(text) && !TOKEN_THROTTLE_TEXT.test(text))
   )
     return new QuotaExceededError(details)
   if (input.status === 401 || input.status === 403 || codes.some((code) => AUTH_CODES.has(code)))

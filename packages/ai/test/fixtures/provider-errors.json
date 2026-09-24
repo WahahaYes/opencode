@@ -1,0 +1,209 @@
+[
+  {
+    "provider": "anthropic",
+    "model": "claude-haiku-4-5",
+    "maxTokens": 64001,
+    "status": 400,
+    "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"max_tokens: 64001 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001\"},\"request_id\":\"req_redacted\"}",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "output-limit",
+      "acceptedMaxTokens": 64000
+    }
+  },
+  {
+    "provider": "anthropic",
+    "model": "claude-haiku-4-5",
+    "maxTokens": 16,
+    "status": 400,
+    "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 210027 tokens > 200000 maximum\"},\"request_id\":\"req_redacted\"}",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "context-overflow"
+    }
+  },
+  {
+    "provider": "amazon-bedrock",
+    "model": "amazon.nova-micro-v1:0",
+    "maxTokens": 10001,
+    "status": 400,
+    "body": "{\"message\":\"The maximum tokens you requested exceeds the model limit of 10000. Try again with a maximum tokens value that is lower than 10000.\"}",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "output-limit",
+      "acceptedMaxTokens": 10000
+    }
+  },
+  {
+    "provider": "deepseek",
+    "model": "deepseek-flash",
+    "maxTokens": 10000000,
+    "status": 400,
+    "body": "{\"error\":{\"message\":\"Invalid max_tokens value, the valid range of max_tokens is [1, 393216]\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_request_error\"}}",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "output-limit",
+      "acceptedMaxTokens": 393216
+    }
+  },
+  {
+    "provider": "groq",
+    "model": "openai/gpt-oss-20b",
+    "maxTokens": 65537,
+    "status": 400,
+    "body": "{\"error\":{\"message\":\"`max_tokens` must be less than or equal to `65536`, the maximum value for `max_tokens` is less than the `context_window` for this model\",\"type\":\"invalid_request_error\",\"param\":\"max_tokens\"}}\n",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "output-limit",
+      "acceptedMaxTokens": 65536
+    }
+  },
+  {
+    "provider": "groq",
+    "model": "allam-2-7b",
+    "maxTokens": 16,
+    "status": 400,
+    "body": "{\"error\":{\"message\":\"Please reduce the length of the messages or completion.\",\"type\":\"invalid_request_error\",\"param\":\"messages\"}}\n",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "context-overflow"
+    }
+  },
+  {
+    "provider": "groq",
+    "model": "allam-2-7b",
+    "maxTokens": 3000,
+    "status": 429,
+    "body": "{\"error\":{\"message\":\"Rate limit reached for model `allam-2-7b` in organization `org_redacted` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 3921, Requested 3983. Please try again in 19.04s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing\",\"type\":\"tokens\",\"code\":\"rate_limit_exceeded\"}}\n",
+    "expected": {
+      "tag": "RateLimit"
+    }
+  },
+  {
+    "provider": "cerebras",
+    "model": "qwen-3.8-27b",
+    "maxTokens": 16,
+    "status": 429,
+    "body": "{\"message\":\"Tokens per minute limit exceeded - too many tokens processed.\",\"type\":\"too_many_tokens_error\",\"param\":\"quota\",\"code\":\"token_quota_exceeded\"}",
+    "expected": {
+      "tag": "RateLimit"
+    }
+  },
+  {
+    "provider": "meta",
+    "model": "muse-spark-1.2",
+    "maxTokens": 10000000,
+    "status": 429,
+    "body": "{\"error\":{\"code\":\"rate_limit_exceeded\",\"message\":\"Output token rate limit exceeded. Try lowering max_completion_tokens to reduce reserved capacity. Please retry after a brief wait.\",\"param\":null,\"type\":\"rate_limit_error\"}}",
+    "expected": {
+      "tag": "RateLimit"
+    }
+  },
+  {
+    "provider": "minimax",
+    "model": "MiniMax-M2",
+    "maxTokens": 10000000,
+    "status": 400,
+    "body": "{\"type\":\"error\",\"error\":{\"type\":\"bad_request_error\",\"message\":\"invalid params, model[MiniMax-M2] does not support max tokens \\u003e 196608 (2013)\",\"http_code\":\"400\"},\"request_id\":\"req_redacted\"}",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "output-limit",
+      "acceptedMaxTokens": 196608
+    }
+  },
+  {
+    "provider": "perplexity",
+    "model": "sonar",
+    "maxTokens": 10000000,
+    "status": 400,
+    "body": "{\"error\":{\"message\":\"max_tokens must be at most 128000\",\"type\":\"invalid_request\",\"code\":400,\"param\":\"max_tokens\"}}\n",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "output-limit",
+      "acceptedMaxTokens": 128000
+    }
+  },
+  {
+    "provider": "together",
+    "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "maxTokens": 131073,
+    "status": 400,
+    "body": "{\n  \"id\":\"redacted\",\n  \"error\": {\n    \"message\": \"Input validation error: `inputs` tokens + `max_new_tokens` must be <= 131073. Given: 40 `inputs` tokens and 131073 `max_new_tokens`\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"max_tokens\",\n    \"code\": null\n  }\n}",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "output-limit",
+      "acceptedMaxTokens": 131033
+    }
+  },
+  {
+    "provider": "openrouter",
+    "model": "openai/gpt-4.1-nano",
+    "maxTokens": 10000000,
+    "status": 400,
+    "body": "{\"error\":{\"message\":\"This endpoint's maximum context length is 1047576 tokens. However, you requested about 10000005 tokens (5 of text input, 10000000 in the output). Please reduce the length of either one, or use the context-compression plugin to compress your prompt automatically.\",\"code\":400,\"metadata\":{\"provider_name\":null}}}",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "output-limit",
+      "acceptedMaxTokens": 1047571
+    }
+  },
+  {
+    "provider": "xiaomi",
+    "model": "mimo-v2.5",
+    "maxTokens": 131073,
+    "status": 400,
+    "body": "{\"error\":{\"code\":\"400\",\"message\":\"Param Incorrect\",\"param\":\"max_tokens is too large: 131073. This model supports at most 131072 completion tokens, whereas you provided 131073.\",\"type\":\"\"}}",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "output-limit",
+      "acceptedMaxTokens": 131072
+    }
+  },
+  {
+    "provider": "zai",
+    "model": "glm-4.5-air",
+    "maxTokens": 98305,
+    "status": 400,
+    "body": "{\"error\":{\"code\":\"1210\",\"message\":\"The max_tokens parameter is illegal.：限制数值范围[1,98304]\"}}",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "output-limit",
+      "acceptedMaxTokens": 98304
+    }
+  },
+  {
+    "provider": "alibaba",
+    "model": "qwen-turbo",
+    "maxTokens": 16385,
+    "status": 400,
+    "body": "{\"error\":{\"message\":\"<400> InternalError.Algo.InvalidParameter: Range of max_tokens should be [1, 16384]\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_parameter_error\"},\"id\":\"redacted\",\"request_id\":\"req_redacted\"}",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "output-limit",
+      "acceptedMaxTokens": 16384
+    }
+  },
+  {
+    "provider": "alibaba",
+    "model": "qwen-mt-turbo",
+    "maxTokens": 16,
+    "status": 400,
+    "body": "{\"error\":{\"message\":\"<400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 8192]\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_parameter_error\"},\"id\":\"redacted\",\"request_id\":\"req_redacted\"}",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "context-overflow"
+    }
+  },
+  {
+    "provider": "baseten",
+    "model": "thinkingmachines/inkling-small",
+    "maxTokens": 10000000,
+    "status": 400,
+    "body": "{\n\t\"error\": {\n\t\t\"code\": 400,\n\t\t\"message\": \"Invalid request: ['max_tokens (10000000): Input should be less than or equal to 262144']\",\n\t\t\"type\": \"Bad Request\"\n\t}\n}\n",
+    "expected": {
+      "tag": "InvalidRequest",
+      "classification": "output-limit",
+      "acceptedMaxTokens": 262144
+    }
+  }
+]

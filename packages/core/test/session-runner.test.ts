@@ -127,6 +127,7 @@ const fullOutputModel = testModel("full-output", { context: 262_144, output: 262
 const unknownContextModel = testModel("unknown-context", { context: 0, output: 32_000 })
 const undersizedContextModel = testModel("undersized-context", { context: 1, output: 1_000 })
 const recoveryModel = testModel("recovery", { context: 200_000, output: 1_000 })
+const fittedOutputModel = testModel("fitted-output", { context: 100_000, output: 64_000 })
 
 test("calculates step cost using the matching context tier", () => {
   expect(
@@ -621,6 +622,20 @@ const providerUnavailable = () =>
       operation: "request",
     }),
   })
+
+const outputLimitMessage = (requested: number, accepted: number) =>
+  `max_tokens: ${requested} > ${accepted}, which is the maximum allowed number of output tokens for fake-model`
+
+const outputLimitRejection = (requested: number, accepted: number) =>
+  Stream.fail(
+    new AIError({
+      reason: new InvalidRequestError({
+        message: outputLimitMessage(requested, accepted),
+        classification: "output-limit",
+        acceptedMaxTokens: accepted,
+      }),
+    }),
+  )
 
 const streamDisconnected = () =>
   new AIError({
@@ -2985,7 +3000,7 @@ describe("SessionRunnerLLM", () => {
     expect(yield* Effect.exit(s.resume)).toMatchObject({ _tag: "Failure" })
 
     expect(s.requests).toHaveLength(1)
-    expect(s.requests[0]?.generation).toBeUndefined()
+    expect(s.requests[0]?.generation?.maxTokens).toBe(50)
     expect(yield* s.context).toContainEqual(
       expect.objectContaining({
         type: "compaction",
@@ -3188,6 +3203,58 @@ describe("SessionRunnerLLM", () => {
       { type: "compaction", summary: "## Objective\n- Recover raw overflow" },
       { type: "assistant", finish: "stop" },
     ])
+  })
+
+  scenario("retries once at the output limit a provider accepts after rejecting the requested one", function* (s) {
+    yield* s.llm.push(outputLimitRejection(32_000, 8_000), TestLLM.text("Done", "text-lowered"))
+    yield* s.runPrompt("Write it")
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([32_000, 8_000])
+    expect(yield* s.context).toMatchObject([Expected.user("Write it"), { type: "assistant", finish: "stop" }])
+    expect(yield* recordedEventTypes(sessionID)).not.toContain("session.retry.scheduled.1")
+  })
+
+  scenario("fails when the provider rejects the lowered output limit", function* (s) {
+    yield* s.llm.push(outputLimitRejection(32_000, 8_000), outputLimitRejection(8_000, 4_000))
+    yield* s.admit("Write it")
+    expect((yield* s.resume.pipe(Effect.flip)).message).toBe(outputLimitMessage(8_000, 4_000))
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([32_000, 8_000])
+    expect(yield* s.context).toContainEqual(
+      expect.objectContaining({
+        type: "assistant",
+        finish: "error",
+        error: expect.objectContaining({ message: outputLimitMessage(8_000, 4_000) }),
+      }),
+    )
+  })
+
+  scenario("keeps a lowered output limit through transient retries in the same step", function* (s) {
+    yield* s.admit("Write it")
+    yield* s.llm.push(
+      outputLimitRejection(32_000, 8_000),
+      Stream.fail(providerUnavailable()),
+      TestLLM.text("Done", "text-lowered"),
+    )
+    const scheduled = yield* subscribeRetries(s)
+    const run = yield* s.resume.pipe(Effect.forkChild)
+    yield* Queue.take(scheduled)
+    yield* TestClock.adjust("2400 millis")
+    yield* Fiber.join(run)
+
+    expect(s.requests.map((request) => request.generation?.maxTokens)).toEqual([32_000, 8_000, 8_000])
+  })
+
+  scenario("fits the output limit to the prompt size", function* (s) {
+    s.currentModel = fittedOutputModel
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "text-fitted-first", 50_000))
+    yield* s.runPrompt("Earlier question")
+    yield* s.llm.push(TestLLM.text("Continued", "text-fitted-final"))
+    yield* s.runPrompt("Continue")
+
+    expect(s.requests[0]?.generation?.maxTokens).toBe(64_000)
+    expect(s.requests[1]?.generation?.maxTokens).toBeLessThan(100_000 - 50_000 - 4_096)
+    expect(s.requests[1]?.generation?.maxTokens).toBeGreaterThan(100_000 - 50_000 - 4_096 - 100)
   })
 
   scenario("publishes the original overflow when recovery summarization fails", function* (s) {

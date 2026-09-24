@@ -490,6 +490,7 @@ export const layer = Layer.effect(
           ...(input.instructionUpdate ? [Message.system(input.instructionUpdate)] : []),
         ],
         webSocket,
+        inputTokens: estimateTokens({ messages, resolved: context.model, context }),
       })
     }
     /** The durable transcript since the last local summary, re-expanding every native window. */
@@ -650,7 +651,7 @@ export const layer = Layer.effect(
           chunks.length = 0
           providerState = undefined
           failure = undefined
-          return llm.stream(request, prepared.options)
+          return SessionModelRequest.streamAuxiliary(llm, request, prepared.options)
         }).pipe(
           Stream.runForEach((event) => {
             if (LLMEvent.is.providerError(event))
